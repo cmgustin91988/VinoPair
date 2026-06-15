@@ -58,7 +58,7 @@ import {
   lookupWineWithProfile
 } from "./wineLookupService";
 import { extractBarcodeCandidate, lookupWineByBarcode } from "./openFoodFactsService";
-import { identifyWineLabelWithVision, VisionLabelResult } from "./labelVisionService";
+import { identifyMealImageWithVision, identifyWineLabelWithVision, VisionLabelResult } from "./labelVisionService";
 import logoSrc from "./assets/vinopair-logo.png";
 import {
   CloudSession,
@@ -144,6 +144,7 @@ function App() {
   const [isCloudBusy, setIsCloudBusy] = useState(false);
   const cloudHydrated = useRef(false);
   const cloudSaveTimer = useRef<number | null>(null);
+  const pairingTimer = useRef<number | null>(null);
 
   useEffect(() => {
     localStorage.setItem(storageKeys.inventory, JSON.stringify(inventory));
@@ -181,16 +182,30 @@ function App() {
 
   const runPairingForText = (text: string) => {
     const normalizedMeal = normalizeMealInput(text);
-    if (!normalizedMeal.trim()) return;
+    if (!normalizedMeal.trim()) {
+      setUploadedLabel("Add a readable meal description before pairing.");
+      return;
+    }
+
+    if (pairingTimer.current) {
+      window.clearTimeout(pairingTimer.current);
+    }
+
     setMealInput(normalizedMeal);
     setIsThinking(true);
     setActiveScreen("results");
 
-    window.setTimeout(() => {
-      const nextAnalysis = analyzeMeal(normalizedMeal);
-      setAnalysis(nextAnalysis);
-      setRecommendation(recommendPairing(nextAnalysis, preferences, inventory, pairingMode, occasion));
+    pairingTimer.current = window.setTimeout(() => {
+      try {
+        const nextAnalysis = analyzeMeal(normalizedMeal);
+        setAnalysis(nextAnalysis);
+        setRecommendation(recommendPairing(nextAnalysis, preferences, inventory, pairingMode, occasion));
+        setUploadedLabel(`Pairing ready for ${nextAnalysis.dish_name}`);
+      } catch {
+        setUploadedLabel("Pairing could not complete. Try a simpler meal description.");
+      }
       setIsThinking(false);
+      pairingTimer.current = null;
     }, 780);
   };
 
@@ -221,15 +236,20 @@ function App() {
     if (file.type.startsWith("image/")) {
       setInputMode("screenshot");
       setUploadedLabel(`Reading ${file.name}...`);
-      const imageText = await readImageText(file);
-      const normalizedMeal = normalizeMealInput(imageText || file.name);
-      setUploadedLabel(
-        imageText
-          ? `${file.name} translated into a meal description`
-          : `${file.name} needs review; using file name as fallback`
-      );
+      const imageDataUrl = await readFileAsDataUrl(file);
+      const visionMeal = await identifyMealImageWithVision(imageDataUrl, file.name);
+      const imageText = visionMeal ? "" : await readImageText(file);
+      const normalizedMeal = visionMeal?.meal_description
+        ? normalizeMealInput(visionMeal.meal_description)
+        : normalizeMealInput(isUsableOcrText(imageText) ? imageText : "");
+      setUploadedLabel(uploadMessageForMealImage(file.name, visionMeal?.confidence, normalizedMeal));
       event.target.value = "";
-      runPairingForText(normalizedMeal);
+      if (normalizedMeal) {
+        runPairingForText(normalizedMeal);
+      } else {
+        setMealInput("");
+        setUploadedLabel(`${file.name} could not be read. Type or crop the menu item, then run pairing.`);
+      }
       return;
     }
 
@@ -1234,7 +1254,7 @@ function InventoryScreen({
 
           const suggestion = visionResult
             ? createVisionLabelSuggestion(visionResult, file.name, inventory.length + labelQueue.length + index + 1)
-            : labelText
+            : isUsableOcrText(labelText)
             ? identifyWineFromLabelText(labelText, file.name, inventory.length + labelQueue.length + index + 1)
             : identifyWineFromImageName(file.name, inventory.length + labelQueue.length + index + 1);
 
@@ -1248,7 +1268,7 @@ function InventoryScreen({
             fileName: file.name,
             imageUrl: URL.createObjectURL(file),
             ...suggestion,
-            note: scanNoteForLookup(suggestion.note, suggestion.lookupQueries, lookup),
+            note: scanNoteForLookup(suggestion.note, suggestion.lookupQueries, lookup, Boolean(visionResult), labelText),
             externalMatches: lookup.matches,
             wine: {
               ...enrichedWine,
@@ -2639,17 +2659,54 @@ function scoreWineLookup(lookup: WineLookupResult, query: string) {
   return score;
 }
 
-function scanNoteForLookup(baseNote: string, queries: string[], lookup: WineLookupResult) {
+function isUsableOcrText(text: string) {
+  const cleaned = text
+    .replace(/https?:\/\/\S+/gi, " ")
+    .replace(/\b(img|image|photo|scan|screenshot|jpeg|jpg|png|heic)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const letters = cleaned.replace(/[^a-zA-Z]/g, "").length;
+  const words = cleaned.split(/\s+/).filter((word) => /[a-zA-Z]{3}/.test(word));
+  const symbolRatio = cleaned ? cleaned.replace(/[a-zA-Z0-9\s]/g, "").length / cleaned.length : 1;
+
+  return letters >= 10 && words.length >= 2 && symbolRatio < 0.35;
+}
+
+function uploadMessageForMealImage(fileName: string, confidence: number | undefined, normalizedMeal: string) {
+  if (normalizedMeal && typeof confidence === "number") {
+    return `${fileName} translated into: ${normalizedMeal}${confidence < 0.65 ? " (review suggested)" : ""}`;
+  }
+
+  if (normalizedMeal) {
+    return `${fileName} translated with OCR fallback; review the meal description.`;
+  }
+
+  return `${fileName} could not be translated automatically.`;
+}
+
+function scanNoteForLookup(
+  baseNote: string,
+  queries: string[],
+  lookup: WineLookupResult,
+  usedVision: boolean,
+  ocrText: string
+) {
   const matched = lookup.matches.find((match) => match.status === "matched");
+  const methodNote = usedVision
+    ? "AI vision read the label."
+    : isUsableOcrText(ocrText)
+      ? "Browser OCR read the label; AI vision was unavailable."
+      : "AI vision was unavailable and OCR was not reliable; review the label manually.";
+
   if (matched) {
-    return `${baseNote} Best source match: ${matched.label}.`;
+    return `${methodNote} ${baseNote} Best source match: ${matched.label}.`;
   }
 
   if (queries.length > 1) {
-    return `${baseNote} Tried ${queries.length} label-based searches; review the recognized name before adding.`;
+    return `${methodNote} ${baseNote} Tried ${queries.length} label-based searches; review the recognized name before adding.`;
   }
 
-  return baseNote;
+  return `${methodNote} ${baseNote}`;
 }
 
 function toggleValue<T>(values: T[], option: T) {

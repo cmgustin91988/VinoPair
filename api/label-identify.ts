@@ -2,6 +2,7 @@ type LabelIdentifyRequest = {
   body?: {
     imageDataUrl?: string;
     fileName?: string;
+    mode?: "wine-label" | "menu-item";
   };
   method?: string;
 };
@@ -33,6 +34,7 @@ export default async function handler(request: LabelIdentifyRequest, response: L
 
   const imageDataUrl = request.body?.imageDataUrl;
   const fileName = request.body?.fileName ?? "uploaded label";
+  const mode = request.body?.mode ?? "wine-label";
 
   if (!imageDataUrl || !imageDataUrl.startsWith("data:image/")) {
     response.status(400).json({ error: "Missing image data URL." });
@@ -60,20 +62,18 @@ export default async function handler(request: LabelIdentifyRequest, response: L
         messages: [
           {
             role: "system",
-            content:
-              "You identify wine bottles from label photos. Return only valid compact JSON. If unsure, use nulls and a lower confidence."
+            content: [
+              "You analyze user-uploaded food and wine images for a wine pairing app.",
+              "Return only valid compact JSON.",
+              "Never invent text that is not visible. If the image is unreadable or unrelated, return low confidence and null fields."
+            ].join(" ")
           },
           {
             role: "user",
             content: [
               {
                 type: "text",
-                text: [
-                  `File name: ${fileName}`,
-                  "Read the visible wine label and identify the bottle.",
-                  "Return JSON with: name, producer, vintage, region, country, grape array, appellation, style, raw_text, lookup_queries array, confidence number 0-1, note.",
-                  "Prefer the actual front-label text over guesses. Include producer and vintage when visible. For style use one of Red, White, Rose, Orange, Sparkling, Unknown."
-                ].join("\n")
+                text: mode === "menu-item" ? menuPrompt(fileName) : wineLabelPrompt(fileName)
               },
               {
                 type: "image_url",
@@ -112,4 +112,26 @@ export default async function handler(request: LabelIdentifyRequest, response: L
       note: "Vision label identification failed; falling back to browser OCR."
     });
   }
+}
+
+function wineLabelPrompt(fileName: string) {
+  return [
+    `File name: ${fileName}`,
+    "Read the visible wine label and identify the bottle.",
+    "Return JSON with: name, producer, vintage, region, country, grape array, appellation, style, raw_text, lookup_queries array, confidence number 0-1, note.",
+    "Prefer exact front-label text over guesses. Include producer and vintage only when visible or strongly implied by visible label text.",
+    "For style use one of Red, White, Rose, Orange, Sparkling, Unknown.",
+    "If this is not a readable wine label, set name to null, confidence below 0.4, and explain why in note."
+  ].join("\n");
+}
+
+function menuPrompt(fileName: string) {
+  return [
+    `File name: ${fileName}`,
+    "Read the menu screenshot or food photo.",
+    "Return JSON with: meal_description, dish_name, main_ingredients array, cuisine, sauce, protein, raw_text, confidence number 0-1, note.",
+    "If it is a menu, extract the most specific visible menu item. If it is a food photo, describe the likely dish without overclaiming.",
+    "The meal_description should be one plain-English phrase suitable for wine pairing.",
+    "If the image is unreadable or not food/menu related, set meal_description to null and confidence below 0.4."
+  ].join("\n");
 }
