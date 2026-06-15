@@ -36,11 +36,14 @@ Important files:
 - `src/pairingService.ts`: meal analysis, wine pairing logic, inverse wine-to-food logic, occasion mode behavior, local wine inference.
 - `src/wineLookupService.ts`: compliant wine-service handoffs and optional approved partner API bridge.
 - `src/openFoodFactsService.ts`: Open Food Facts barcode lookup.
+- `src/cloudSyncService.ts`: optional Supabase account and cloud inVINtory sync.
+- `api/wine-lookup.ts`: Vercel serverless bridge for approved server-side wine data providers.
 - `src/assets/vinopair-logo.png`: bundled VinoPair logo used by the app UI.
 - `public/vinopair-logo.png`: VinoPair logo.
 - `README.md`: product and integration overview.
 - `ARCHITECTURE.md`: source strategy, data flow, and production expansion notes.
 - `DEPLOYMENT.md`: Vercel and GitHub deployment workflow.
+- `SUPABASE_SETUP.md`: Supabase schema, auth, and cloud sync setup.
 - `CONTRIBUTING.md`: contributor setup and PR checklist.
 - `.github/workflows/ci.yml`: GitHub Actions build check.
 
@@ -91,6 +94,7 @@ GitHub Actions also runs `npm ci` and `npm run build` on pushes to `main` and pu
 - Use compliant outbound search links for Vivino, Wine-Searcher, and CellarTracker.
 - Use Open Food Facts for public barcode/product lookup.
 - If commercial wine data access is needed, use the `VITE_WINE_LOOKUP_API_URL` partner API bridge in `src/wineLookupService.ts`.
+- Prefer the bundled `/api/wine-lookup` bridge for server-side provider keys on Vercel; never expose provider secrets in `VITE_` variables.
 - Manual adds, label scans, and barcode matches should all result in a wine with style, body, acidity, tannin, sweetness, flavor notes, pairing notes, source references, and verification status.
 - If an external source is unavailable, degrade gracefully to inferred profile plus verification links.
 
@@ -115,6 +119,7 @@ GitHub Actions also runs `npm ci` and `npm run build` on pushes to `main` and pu
 ## State And Persistence
 
 - Inventory and preferences are currently stored in `localStorage`.
+- If Supabase env vars are configured, the Account tab can sync inventory and preferences to `vinopair_profiles`.
 - Storage keys may still reference `invintory`; that is acceptable because inVINtory is the cellar module.
 - `starterInventory` lives in `src/pairingService.ts`.
 - `ensureWineAnalysis` migrates older stored wine objects into the current analysis shape.

@@ -9,6 +9,8 @@ VinoPair is a client-side React app built with Vite and TypeScript.
 - `src/pairingService.ts`: meal analysis, wine pairing, inverse food pairing, wine inference, and starter inventory.
 - `src/wineLookupService.ts`: compliant wine-source enrichment, Open Food Facts name search, source links, and optional partner API bridge.
 - `src/openFoodFactsService.ts`: barcode lookup through Open Food Facts.
+- `src/cloudSyncService.ts`: optional Supabase auth and cloud state persistence.
+- `api/wine-lookup.ts`: Vercel serverless bridge for approved wine data providers.
 
 ## Data Flow
 
@@ -34,6 +36,7 @@ Current persistence is browser-local:
 - Inventory: `localStorage`
 - Preferences: `localStorage`
 - Source refresh ledger: `localStorage`
+- Optional cloud profile: Supabase `vinopair_profiles`
 
 Future production persistence can move these to a backend database without changing the pairing service contract.
 

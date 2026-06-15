@@ -32,6 +32,7 @@ VinoPair is a standalone wine application focused on:
 - Open Food Facts barcode lookup for public product records.
 - Pairing results with best cellar match, ideal bottle to buy, confidence, alternatives, occasion rationale, and wines to avoid.
 - Inverse pairing results with ideal dishes, weeknight options, foods to avoid, and serving notes for the selected wine.
+- Optional Account tab for Supabase-backed user accounts, cloud inVINtory sync, and cross-device persistence.
 
 ## Run Locally
 
@@ -54,6 +55,7 @@ npm run build
 - `ARCHITECTURE.md`: app structure, data flow, source strategy, and AI expansion points.
 - `CONTRIBUTING.md`: local setup and pull request checklist.
 - `DEPLOYMENT.md`: Vercel setup, environment variables, and GitHub deployment flow.
+- `SUPABASE_SETUP.md`: account and cloud persistence setup.
 - `.env.example`: optional wine lookup API configuration.
 
 ## Built-In Pairing Scenarios
@@ -82,6 +84,7 @@ The app isolates pairing intelligence in `src/pairingService.ts` so production A
 - OCI Vision for menu screenshot OCR
 - Oracle Autonomous Database for durable inVINtory, preferences, and pairing history
 - Optional vector search for semantic dish-to-wine and bottle-to-profile matching
+- Supabase is currently supported as the fastest account/cloud persistence path.
 
 ## Wine Service Integration
 
@@ -95,7 +98,14 @@ By default, the app uses compliant search handoffs to:
 
 Barcode lookup uses the public Open Food Facts product API (`src/openFoodFactsService.ts`) to match UPC/EAN codes without scraping commercial wine sites.
 
-For approved commercial API access, set `VITE_WINE_LOOKUP_API_URL` to a backend endpoint that returns:
+For approved commercial API access, either set `VITE_WINE_LOOKUP_API_URL` to a backend endpoint or configure the included Vercel `/api/wine-lookup` bridge with:
+
+```text
+WINE_PROVIDER_API_URL
+WINE_PROVIDER_API_KEY
+```
+
+The endpoint should return:
 
 ```json
 {

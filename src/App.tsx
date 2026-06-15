@@ -22,6 +22,7 @@ import {
   Sparkles,
   Trash2,
   Upload,
+  UserCircle,
   Wine
 } from "lucide-react";
 import { ChangeEvent, CSSProperties, ReactNode, useEffect, useMemo, useRef, useState } from "react";
@@ -57,8 +58,18 @@ import {
 } from "./wineLookupService";
 import { extractBarcodeCandidate, lookupWineByBarcode } from "./openFoodFactsService";
 import logoSrc from "./assets/vinopair-logo.png";
+import {
+  CloudSession,
+  cloudSyncAvailable,
+  getStoredCloudSession,
+  loadCloudState,
+  saveCloudState,
+  signInWithEmail,
+  signUpWithEmail,
+  storeCloudSession
+} from "./cloudSyncService";
 
-type Screen = "meal" | "wine" | "preferences" | "results" | "inventory";
+type Screen = "meal" | "wine" | "preferences" | "results" | "inventory" | "account";
 type InputMode = "screenshot" | "recipe" | "manual";
 type CompassMetric = {
   label: string;
@@ -124,6 +135,13 @@ function App() {
   const [isThinking, setIsThinking] = useState(false);
   const [uploadedLabel, setUploadedLabel] = useState("Ready for dinner details");
   const [copied, setCopied] = useState(false);
+  const [cloudSession, setCloudSession] = useState<CloudSession | null>(() => getStoredCloudSession());
+  const [cloudStatus, setCloudStatus] = useState(
+    cloudSyncAvailable() ? "Cloud sync ready" : "Local mode. Add Supabase env vars for cloud accounts."
+  );
+  const [isCloudBusy, setIsCloudBusy] = useState(false);
+  const cloudHydrated = useRef(false);
+  const cloudSaveTimer = useRef<number | null>(null);
 
   useEffect(() => {
     localStorage.setItem(storageKeys.inventory, JSON.stringify(inventory));
@@ -132,6 +150,25 @@ function App() {
   useEffect(() => {
     localStorage.setItem(storageKeys.preferences, JSON.stringify(preferences));
   }, [preferences]);
+
+  useEffect(() => {
+    if (!cloudSession || !cloudSyncAvailable()) return;
+    if (!cloudHydrated.current) return;
+
+    if (cloudSaveTimer.current) {
+      window.clearTimeout(cloudSaveTimer.current);
+    }
+
+    cloudSaveTimer.current = window.setTimeout(() => {
+      void saveCurrentCloudState(cloudSession, "Autosaved to cloud.");
+    }, 1200);
+
+    return () => {
+      if (cloudSaveTimer.current) {
+        window.clearTimeout(cloudSaveTimer.current);
+      }
+    };
+  }, [cloudSession, inventory, preferences]);
 
   const inventoryCount = useMemo(
     () => inventory.reduce((total, wine) => total + wine.quantity, 0),
@@ -213,6 +250,84 @@ function App() {
     window.setTimeout(() => setCopied(false), 1200);
   };
 
+  const saveCurrentCloudState = async (session: CloudSession, successMessage = "Saved to cloud.") => {
+    if (!cloudSyncAvailable()) {
+      setCloudStatus("Cloud sync is not configured yet.");
+      return;
+    }
+
+    try {
+      await saveCloudState(session, { inventory, preferences });
+      setCloudStatus(successMessage);
+    } catch (error) {
+      setCloudStatus(error instanceof Error ? error.message : "Cloud save failed.");
+    }
+  };
+
+  const signIntoCloud = async (email: string, password: string, mode: "signin" | "signup") => {
+    setIsCloudBusy(true);
+    setCloudStatus(mode === "signup" ? "Creating account..." : "Signing in...");
+
+    try {
+      const session = mode === "signup" ? await signUpWithEmail(email, password) : await signInWithEmail(email, password);
+      setCloudSession(session);
+      const cloudState = await loadCloudState(session);
+
+      if (cloudState) {
+        setInventory(cloudState.inventory.map((wine, index) => ensureWineAnalysis(wine, index + 1)));
+        setPreferences(normalizePreferences(cloudState.preferences));
+        setCloudStatus("Loaded your cloud cellar.");
+      } else {
+        await saveCloudState(session, { inventory, preferences });
+        setCloudStatus("Account connected. Local cellar saved to cloud.");
+      }
+
+      cloudHydrated.current = true;
+    } catch (error) {
+      setCloudStatus(error instanceof Error ? error.message : "Cloud sign in failed.");
+    } finally {
+      setIsCloudBusy(false);
+    }
+  };
+
+  const signOutOfCloud = () => {
+    storeCloudSession(null);
+    setCloudSession(null);
+    cloudHydrated.current = false;
+    setCloudStatus("Signed out. This device is using local storage.");
+  };
+
+  const loadFromCloud = async () => {
+    if (!cloudSession) return;
+    setIsCloudBusy(true);
+    setCloudStatus("Loading cloud cellar...");
+
+    try {
+      const cloudState = await loadCloudState(cloudSession);
+      if (!cloudState) {
+        setCloudStatus("No cloud cellar yet. Save this cellar to start syncing.");
+        return;
+      }
+      setInventory(cloudState.inventory.map((wine, index) => ensureWineAnalysis(wine, index + 1)));
+      setPreferences(normalizePreferences(cloudState.preferences));
+      cloudHydrated.current = true;
+      setCloudStatus("Cloud cellar loaded.");
+    } catch (error) {
+      setCloudStatus(error instanceof Error ? error.message : "Cloud load failed.");
+    } finally {
+      setIsCloudBusy(false);
+    }
+  };
+
+  const saveToCloudNow = async () => {
+    if (!cloudSession) return;
+    setIsCloudBusy(true);
+    setCloudStatus("Saving cloud cellar...");
+    await saveCurrentCloudState(cloudSession, "Cloud cellar saved.");
+    cloudHydrated.current = true;
+    setIsCloudBusy(false);
+  };
+
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -229,7 +344,8 @@ function App() {
             ["wine", "Wine First", <Wine size={17} key="wine" />],
             ["preferences", "Preferences", <Settings2 size={17} key="preferences" />],
             ["results", "Pairing", <Sparkles size={17} key="results" />],
-            ["inventory", "inVINtory", <Database size={17} key="inventory" />]
+            ["inventory", "inVINtory", <Database size={17} key="inventory" />],
+            ["account", "Account", <UserCircle size={17} key="account" />]
           ].map(([screen, label, icon]) => (
             <button
               className={activeScreen === screen ? "tab active" : "tab"}
@@ -312,6 +428,20 @@ function App() {
         <InventoryScreen inventory={inventory} setInventory={setInventory} />
       )}
 
+      {activeScreen === "account" && (
+        <AccountScreen
+          available={cloudSyncAvailable()}
+          cloudStatus={cloudStatus}
+          inventoryCount={inventoryCount}
+          isBusy={isCloudBusy}
+          onLoad={loadFromCloud}
+          onSave={saveToCloudNow}
+          onSignIn={signIntoCloud}
+          onSignOut={signOutOfCloud}
+          session={cloudSession}
+        />
+      )}
+
       <ArchitecturePanel />
     </main>
   );
@@ -388,6 +518,7 @@ function WineFirstScreen({
 
         <WineProfileVisual wine={pairedWine} />
         <WineFunkMeter wine={pairedWine} />
+        <ServingGuidanceCard wine={pairedWine} />
         <OccasionModes occasion={occasion} onOccasion={onOccasion} />
 
         <div className="wine-choice-grid">
@@ -476,6 +607,7 @@ function WineFirstScreen({
         <div className="serving-note">
           <strong>Serving note</strong>
           <p>{recommendation.serving_note}</p>
+          <ServingGuidanceCard wine={pairedWine} compact />
         </div>
       </aside>
     </section>
@@ -722,6 +854,117 @@ function PreferencesScreen({
           />
         </label>
       </div>
+    </section>
+  );
+}
+
+function AccountScreen({
+  available,
+  cloudStatus,
+  inventoryCount,
+  isBusy,
+  onLoad,
+  onSave,
+  onSignIn,
+  onSignOut,
+  session
+}: {
+  available: boolean;
+  cloudStatus: string;
+  inventoryCount: number;
+  isBusy: boolean;
+  onLoad: () => void;
+  onSave: () => void;
+  onSignIn: (email: string, password: string, mode: "signin" | "signup") => void;
+  onSignOut: () => void;
+  session: CloudSession | null;
+}) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+
+  return (
+    <section className="panel account-panel">
+      <div className="section-heading">
+        <span>
+          <UserCircle size={20} />
+        </span>
+        <div>
+          <p className="eyebrow">Cloud cellar</p>
+          <h2>Account and sync</h2>
+        </div>
+      </div>
+
+      <div className="account-status">
+        <strong>{session ? session.email : available ? "Cloud-ready" : "Local mode"}</strong>
+        <p>{cloudStatus}</p>
+      </div>
+
+      {!available && (
+        <div className="cloud-setup-note">
+          <strong>Cloud sync needs Supabase keys</strong>
+          <p>Add `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in Vercel, then redeploy. The app will keep using local storage until those are set.</p>
+        </div>
+      )}
+
+      {session ? (
+        <div className="account-actions">
+          <Metric label="Cloud cellar bottles" value={`${inventoryCount}`} />
+          <button className="primary-button compact-button" type="button" onClick={onSave} disabled={isBusy}>
+            <Database size={18} />
+            Save Now
+          </button>
+          <button className="secondary-button" type="button" onClick={onLoad} disabled={isBusy}>
+            <RefreshCcw size={17} />
+            Load Cloud
+          </button>
+          <button className="secondary-button danger-button" type="button" onClick={onSignOut}>
+            Sign Out
+          </button>
+        </div>
+      ) : (
+        <div className="account-form">
+          <label>
+            <span>Email</span>
+            <input
+              autoComplete="email"
+              disabled={!available || isBusy}
+              onChange={(event) => setEmail(event.target.value)}
+              placeholder="you@example.com"
+              type="email"
+              value={email}
+            />
+          </label>
+          <label>
+            <span>Password</span>
+            <input
+              autoComplete="current-password"
+              disabled={!available || isBusy}
+              onChange={(event) => setPassword(event.target.value)}
+              placeholder="At least 6 characters"
+              type="password"
+              value={password}
+            />
+          </label>
+          <div className="account-form-actions">
+            <button
+              className="primary-button compact-button"
+              disabled={!available || isBusy || !email || !password}
+              onClick={() => onSignIn(email, password, "signin")}
+              type="button"
+            >
+              Sign In
+            </button>
+            <button
+              className="secondary-button"
+              disabled={!available || isBusy || !email || !password}
+              onClick={() => onSignIn(email, password, "signup")}
+              type="button"
+            >
+              Create Account
+            </button>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
@@ -1626,6 +1869,7 @@ function WineDetailPanel({ wine }: { wine: WineItem }) {
   return (
     <div className="wine-detail-panel">
       <WineFunkMeter wine={wine} />
+      <ServingGuidanceCard wine={wine} />
       <div className="wine-detail-grid">
         <ProfileChip label="Producer" value={producer} />
         <ProfileChip label="Vintage" value={wine.vintage ?? "NV / unknown"} />
@@ -2014,6 +2258,31 @@ function WineProfileVisual({ compact, wine }: { compact?: boolean; wine: WineIte
         <StructureMeter label="Acid" value={acidityScore(wine.acidity)} />
         <StructureMeter label="Tannin" value={tanninScore(wine.tannin)} />
       </div>
+    </div>
+  );
+}
+
+function ServingGuidanceCard({ compact, wine }: { compact?: boolean; wine: WineItem }) {
+  const guidance = servingGuidanceForWine(wine);
+
+  return (
+    <div className={compact ? "serving-guidance-card compact" : "serving-guidance-card"}>
+      <div>
+        <span>Serve</span>
+        <strong>{guidance.temperature}</strong>
+      </div>
+      <div>
+        <span>Open</span>
+        <strong>{guidance.openTime}</strong>
+      </div>
+      <div>
+        <span>Glass</span>
+        <strong>{guidance.glass}</strong>
+      </div>
+      <p>
+        <Clock size={14} />
+        {guidance.note}
+      </p>
     </div>
   );
 }
@@ -2505,6 +2774,102 @@ function drinkingWindowForWine(wine: WineItem) {
   if (wine.verification_status === "needs-review") return "Verify before cellaring";
 
   return `${Math.max(start, currentYear)}-${Math.max(end, currentYear + 1)}`;
+}
+
+function servingGuidanceForWine(wine: WineItem) {
+  const text = [
+    wine.name,
+    wine.style,
+    wine.body,
+    wine.tannin,
+    wine.acidity,
+    ...(wine.tags ?? []),
+    ...(wine.flavor_notes ?? []),
+    ...(wine.grape ?? [])
+  ]
+    .join(" ")
+    .toLowerCase();
+  const vintageYear = wine.vintage ? Number.parseInt(wine.vintage, 10) : undefined;
+  const bottleAge = vintageYear && Number.isFinite(vintageYear) ? new Date().getFullYear() - vintageYear : 0;
+
+  if (wine.style === "Sparkling") {
+    return {
+      temperature: "42-48°F",
+      openTime: "At pour",
+      glass: "Tulip",
+      note: "Keep it properly chilled; a tulip or white wine glass preserves fizz while letting aromatics show."
+    };
+  }
+
+  if (wine.style === "White") {
+    if (wine.body === "Full" || /chardonnay|white burgundy|rich|butter|cream|lees/.test(text)) {
+      return {
+        temperature: "50-55°F",
+        openTime: "10 min",
+        glass: "White wine",
+        note: "Take it out of the fridge briefly so texture, oak, and orchard-fruit notes do not feel muted."
+      };
+    }
+
+    return {
+      temperature: "45-50°F",
+      openTime: "At pour",
+      glass: "White wine",
+      note: "Serve chilled but not icy, keeping acidity crisp while still letting citrus and mineral notes register."
+    };
+  }
+
+  if (wine.style === "Rose") {
+    return {
+      temperature: "46-52°F",
+      openTime: "At pour",
+      glass: "White wine",
+      note: "Serve chilled; let richer or darker rosé warm slightly in the glass if the fruit feels closed."
+    };
+  }
+
+  if (wine.style === "Orange") {
+    return {
+      temperature: "52-58°F",
+      openTime: "15-20 min",
+      glass: "Universal",
+      note: "Serve cellar-cool and give it a short rest so phenolic texture and savory aromatics settle."
+    };
+  }
+
+  if (wine.style === "Red") {
+    if (wine.tannin === "High" || wine.body === "Full" || /cabernet|barolo|nebbiolo|syrah|bordeaux|structured/.test(text)) {
+      return {
+        temperature: "60-64°F",
+        openTime: bottleAge >= 8 ? "30 min decant" : "45-60 min",
+        glass: "Red wine",
+        note: "Serve below room temperature; air helps firm tannin relax and lets darker fruit come forward."
+      };
+    }
+
+    if (wine.body === "Light" || /pinot|gamay|beaujolais|chillable|light/.test(text)) {
+      return {
+        temperature: "54-58°F",
+        openTime: "10-15 min",
+        glass: "Universal",
+        note: "A light chill keeps red fruit bright, freshness high, and alcohol tucked neatly into the background."
+      };
+    }
+
+    return {
+      temperature: "58-62°F",
+      openTime: "20-30 min",
+      glass: "Red wine",
+      note: "A short rest after opening helps savory notes, acidity, and fruit settle into a cleaner first glass."
+    };
+  }
+
+  return {
+    temperature: "50-58°F",
+    openTime: "10-20 min",
+    glass: "Universal",
+    note: "Verify producer and style details for tighter service guidance; this is a flexible cellar-cool baseline."
+  };
 }
 
 function hasText(text: string, terms: string[]) {

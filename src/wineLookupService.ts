@@ -89,9 +89,9 @@ export async function lookupWineExternally(wineName: string): Promise<ExternalWi
 export async function lookupWineWithProfile(wineName: string): Promise<WineLookupResult> {
   const fallbackLinks = buildExternalLookupLinks(wineName);
   const viteEnv = (import.meta as unknown as { env?: Record<string, string | undefined> }).env;
-  const apiUrl = viteEnv?.VITE_WINE_LOOKUP_API_URL;
+  const apiUrl = viteEnv?.VITE_WINE_LOOKUP_API_URL || "/api/wine-lookup";
 
-  if (!apiUrl || !wineName.trim()) {
+  if (!wineName.trim()) {
     const publicLookup = await lookupOpenFoodFactsByName(wineName);
     return {
       matches: [...publicLookup.matches, ...fallbackLinks],
