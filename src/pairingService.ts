@@ -122,6 +122,8 @@ export type LabelScanSuggestion = {
   wine: Wine;
   confidence: number;
   note: string;
+  lookupQueries: string[];
+  rawText: string;
 };
 
 export const starterInventory: Wine[] = [
@@ -981,13 +983,15 @@ export function createWineFromText(input: string, index: number): Wine {
     .replace(/\s+x\s*\d+\b/i, "")
     .trim();
   const inferred = inferWineAttributes(name || input);
+  const facts = inferWineFacts(name || input);
 
   return {
     id: `wine_${Date.now()}_${index}`,
     name: name || input.trim(),
     ...inferred,
+    ...facts,
     source_matches: [],
-    verification_status: inferred.style === "Unknown" ? "needs-review" : "inferred",
+    verification_status: /^review label photo$/i.test(name || input.trim()) ? "needs-review" : "inferred",
     quantity
   };
 }
@@ -1025,21 +1029,29 @@ export function identifyWineFromLabelText(
   fallbackName: string,
   index: number
 ): LabelScanSuggestion {
-  const extractedName = extractWineNameFromLabel(labelText);
+  const extracted = extractWineDetailsFromLabel(labelText);
+  const extractedName = extracted.name;
   const fallbackText = cleanImageFileName(fallbackName);
   const labelTextForWine = extractedName || fallbackText;
   const needsReview = !extractedName && isGenericImageName(fallbackText);
-  const wine = createWineFromText(needsReview || !labelTextForWine ? "Review label photo" : labelTextForWine, index);
+  const baseName = needsReview || !labelTextForWine ? "Review label photo" : labelTextForWine;
+  const wine = createWineFromText(baseName, index);
   const knownStyle = wine.style !== "Unknown";
+  const lookupQueries = buildLabelLookupQueries(extracted, fallbackText);
 
   return {
     wine: {
       ...wine,
+      name: extractedName || wine.name,
+      producer: extracted.producer || wine.producer,
+      vintage: extracted.vintage || wine.vintage,
       tags: Array.from(new Set([...wine.tags.filter((tag) => tag !== "AI can infer attributes"), "label scan"]))
     },
+    lookupQueries,
+    rawText: extracted.rawText,
     confidence: needsReview ? 0.48 : knownStyle ? 0.86 : 0.68,
     note: extractedName
-      ? "Read label text from the photo and inferred cellar traits."
+      ? "Read label text from the photo and prepared source lookup candidates."
       : needsReview
         ? "The photo was loaded, but the scan needs a clearer label. Review the name before adding."
       : knownStyle
@@ -1074,29 +1086,109 @@ function cleanImageFileName(fileName: string) {
     .trim();
 }
 
-function extractWineNameFromLabel(labelText: string) {
-  const lines = labelText
+type ExtractedLabelDetails = {
+  name: string;
+  producer?: string;
+  vintage?: string;
+  appellation?: string;
+  variety?: string;
+  rawText: string;
+};
+
+function extractWineDetailsFromLabel(labelText: string): ExtractedLabelDetails {
+  const lines = normalizeLabelText(labelText)
     .split(/\n+/)
     .map((line) =>
       line
-        .replace(/[^a-zA-Z0-9\s'&.-]/g, " ")
+        .replace(/[^a-zA-Z0-9\s'&.,-]/g, " ")
         .replace(/\s+/g, " ")
         .trim()
     )
     .filter((line) => line.length >= 3)
     .filter((line) => !/^\d+(\.\d+)?\s*%/.test(line))
-    .filter((line) => !/\b(contains|sulfites|alcohol|government|warning|750\s*ml|imported|bottled by)\b/i.test(line));
-  const vintageLine = lines.find((line) => /\b(19|20)\d{2}\b/.test(line));
-  const varietyLine = lines.find((line) =>
-    /\b(chablis|sancerre|riesling|rioja|pinot|malbec|champagne|brut|cabernet|syrah|grenache|barbera|gamay|chenin|sauvignon|merlot|zinfandel|rose|rosé|orange)\b/i.test(line)
-  );
-  const firstUsefulLine = lines[0];
+    .filter((line) => !/\b(contains|sulfites|alcohol|government|warning|750\s*ml|75\s*cl|imported|bottled by|produced by|product of|alc\.?|vol\.?)\b/i.test(line));
+  const rawText = lines.join("\n");
+  const joined = lines.join(" ");
+  const vintage = joined.match(/\b(19|20)\d{2}\b/)?.[0];
+  const appellation = lines.find((line) => wineRegionPattern.test(line)) || joined.match(wineRegionPattern)?.[0];
+  const variety = lines.find((line) => wineVarietyPattern.test(line)) || joined.match(wineVarietyPattern)?.[0];
+  const producer = pickProducerLine(lines, appellation, variety);
+  const nameParts = [vintage, producer, appellation || variety].filter(Boolean);
+  const fallbackLine = lines.find((line) => !/^\d{4}$/.test(line)) || "";
+  const name = nameParts.length >= 2 ? nameParts.join(" ") : (appellation || variety || fallbackLine);
 
-  if (vintageLine && varietyLine && vintageLine !== varietyLine) {
-    return `${vintageLine} ${varietyLine}`.slice(0, 80);
+  return {
+    name: cleanWineName(name).slice(0, 96),
+    producer,
+    vintage,
+    appellation,
+    variety,
+    rawText
+  };
+}
+
+function normalizeLabelText(labelText: string) {
+  return labelText
+    .replace(/[|]/g, "I")
+    .replace(/[“”]/g, "\"")
+    .replace(/[’]/g, "'")
+    .replace(/\bCIIlANTI\b/gi, "Chianti")
+    .replace(/\bCHlANTI\b/gi, "Chianti")
+    .replace(/\bR1OJA\b/gi, "Rioja")
+    .replace(/\bP1NOT\b/gi, "Pinot")
+    .replace(/\bS0NOMA\b/gi, "Sonoma")
+    .replace(/\bNAPA\s+VAL1EY\b/gi, "Napa Valley")
+    .replace(/\b20([0-2])S\b/g, "20$15")
+    .replace(/\b(19|20)(\d)O\b/g, "$1$20");
+}
+
+const wineRegionPattern =
+  /\b(chianti(?: classico)?|brunello di montalcino|barolo|barbaresco|rioja(?: reserva| gran reserva)?|ribera del duero|chablis|sancerre|champagne|prosecco|cava|bordeaux|burgundy|bourgogne|beaujolais|muscadet|mendoza|napa valley|sonoma|tuscany|toscana|sicilia|etna|willamette valley|mosel|alsace|loire|rhone|rhône)\b/i;
+
+const wineVarietyPattern =
+  /\b(pinot noir|cabernet sauvignon|cabernet|merlot|malbec|syrah|shiraz|grenache|sangiovese|nebbiolo|barbera|gamay|zinfandel|tempranillo|chardonnay|sauvignon blanc|riesling|chenin blanc|pinot grigio|pinot gris|albariño|albarino|brut|rosé|rose|orange wine)\b/i;
+
+function pickProducerLine(lines: string[], appellation?: string, variety?: string) {
+  const blockedTerms = [appellation, variety].filter(Boolean);
+  const blocked = blockedTerms.length ? new RegExp(blockedTerms.join("|"), "i") : undefined;
+  const candidates = lines
+    .filter((line) => !/\b(19|20)\d{2}\b/.test(line))
+    .filter((line) => !blocked || !blocked.test(line))
+    .filter((line) => !wineRegionPattern.test(line) && !wineVarietyPattern.test(line))
+    .filter((line) => /[a-zA-Z]{3}/.test(line))
+    .sort((a, b) => scoreProducerLine(b) - scoreProducerLine(a));
+
+  return cleanWineName(candidates[0] || "");
+}
+
+function scoreProducerLine(line: string) {
+  let score = Math.min(line.length, 28);
+  if (/\b(domaine|chateau|château|clos|tenuta|azienda|cantina|bodega|cellars|estate|vineyard|winery|poggio|castello)\b/i.test(line)) {
+    score += 18;
   }
+  if (/^[A-Z0-9\s'&.,-]+$/.test(line)) score += 5;
+  if (line.split(/\s+/).length > 5) score -= 10;
+  return score;
+}
 
-  return (varietyLine || vintageLine || firstUsefulLine || "").slice(0, 80);
+function buildLabelLookupQueries(details: ExtractedLabelDetails, fallbackText: string) {
+  const queries = [
+    details.name,
+    [details.vintage, details.producer, details.appellation].filter(Boolean).join(" "),
+    [details.producer, details.appellation].filter(Boolean).join(" "),
+    [details.producer, details.variety].filter(Boolean).join(" "),
+    [details.vintage, details.appellation].filter(Boolean).join(" "),
+    fallbackText
+  ];
+
+  return uniqueList(queries.map(cleanWineName).filter((query) => query.length >= 3)).slice(0, 6);
+}
+
+function cleanWineName(value: string) {
+  return value
+    .replace(/\b(appellation|controlee|controlled|denominazione|origine|protetta|docg|doc|aoc|reserve)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function isGenericImageName(text: string) {
@@ -1329,39 +1421,158 @@ function inferWineAttributes(name: string): Omit<Wine, "id" | "name" | "quantity
       "zinfandel",
       "chianti",
       "sangiovese",
+      "brunello",
       "montepulciano",
       "nero d'avola",
       "dolcetto",
       "nebbiolo",
+      "barolo",
+      "barbaresco",
       "etna",
-      "mencia"
+      "mencia",
+      "tempranillo",
+      "bordeaux",
+      "cotes du rhone",
+      "côtes du rhône",
+      "napa",
+      "willamette"
     ])
   ) {
-    const fuller = hasAny(text, ["malbec", "cabernet", "syrah", "zinfandel", "rioja"]);
+    const fuller = hasAny(text, ["malbec", "cabernet", "syrah", "zinfandel", "rioja", "barolo", "barbaresco", "brunello", "bordeaux", "napa"]);
+    const italianTomatoRed = hasAny(text, ["chianti", "sangiovese", "brunello", "montepulciano"]);
     return {
       style: "Red",
       body: fuller ? "Medium-full" : "Medium",
-      acidity: hasAny(text, ["barbera", "pinot", "beaujolais", "gamay"]) ? "Medium-high" : "Medium",
+      acidity: hasAny(text, ["barbera", "pinot", "beaujolais", "gamay", "chianti", "sangiovese", "brunello"]) ? "Medium-high" : "Medium",
       tannin: fuller ? "Medium-high" : "Medium",
       sweetness: "Dry",
-      tags: [fuller ? "structured" : "bright", "red fruit", "AI-inferred"],
-      flavor_notes: fuller ? ["black cherry", "plum", "spice", "savory oak"] : ["red cherry", "raspberry", "earth", "dried herbs"],
-      pairing_notes: fuller
+      tags: [fuller ? "structured" : "bright", italianTomatoRed ? "tomato-friendly" : "red fruit", "AI-inferred"],
+      flavor_notes: italianTomatoRed
+        ? ["red cherry", "tomato leaf", "dried herbs", "earth"]
+        : fuller
+          ? ["black cherry", "plum", "spice", "savory oak"]
+          : ["red cherry", "raspberry", "earth", "dried herbs"],
+      pairing_notes: italianTomatoRed
+        ? ["Best with red sauce pasta, pizza, ragù, parmesan, roasted pork, mushrooms, and Tuscan-style grilled meats."]
+        : fuller
         ? ["Best with grilled steak, lamb, burgers, braises, roasted peppers, and hard cheeses."]
         : ["Best with duck, pork, mushrooms, tomato sauces, roast chicken, and herb-driven dishes."]
     };
   }
 
+  if (hasAny(text, ["red wine", "vin rouge", "vino tinto", "rosso"])) {
+    return {
+      style: "Red",
+      body: "Medium",
+      acidity: "Medium",
+      tannin: "Medium",
+      sweetness: "Dry",
+      tags: ["red fruit", "AI-inferred"],
+      flavor_notes: ["red cherry", "plum", "earth", "dried herbs"],
+      pairing_notes: ["Good with roasted meats, tomato sauces, mushrooms, burgers, pork, and hard cheeses."]
+    };
+  }
+
+  if (hasAny(text, ["white wine", "vin blanc", "vino blanco", "bianco", "blanc"])) {
+    return {
+      style: "White",
+      body: "Medium",
+      acidity: "Medium-high",
+      tannin: "Low",
+      sweetness: "Dry",
+      tags: ["fresh", "AI-inferred"],
+      flavor_notes: ["citrus", "green apple", "pear", "mineral"],
+      pairing_notes: ["Good with seafood, chicken, salads, herbs, citrus sauces, and lighter cheeses."]
+    };
+  }
+
   return {
     style: "Unknown",
-    body: "Unknown",
-    acidity: "Unknown",
-    tannin: "Unknown",
-    sweetness: "Unknown",
-    tags: ["AI can infer attributes"],
-    flavor_notes: ["needs review"],
-    pairing_notes: ["Add or verify grape, region, and style to improve pairing recommendations."]
+    body: "Medium",
+    acidity: "Medium",
+    tannin: "Medium",
+    sweetness: "Dry",
+    tags: ["AI-inferred", "source lookup needed"],
+    flavor_notes: ["fruit", "savory notes", "regional character pending source match"],
+    pairing_notes: ["Use intensity-based pairing until source details are verified: match with balanced dishes, moderate richness, and avoid extreme spice or sweetness."]
   };
+}
+
+function inferWineFacts(name: string): Pick<Wine, "producer" | "vintage" | "region" | "country" | "grape"> {
+  const text = name.toLowerCase();
+  const vintage = name.match(/\b(19|20)\d{2}\b/)?.[0];
+  const producer = inferProducerName(name);
+
+  const regionRules: Array<[RegExp, string, string, string[]]> = [
+    [/chianti|tuscany|toscana/i, "Tuscany", "Italy", ["Sangiovese"]],
+    [/brunello/i, "Montalcino", "Italy", ["Sangiovese"]],
+    [/barolo|barbaresco/i, "Piedmont", "Italy", ["Nebbiolo"]],
+    [/barbera|dolcetto/i, "Piedmont", "Italy", text.includes("dolcetto") ? ["Dolcetto"] : ["Barbera"]],
+    [/etna/i, "Sicily", "Italy", ["Nerello Mascalese"]],
+    [/rioja/i, "Rioja", "Spain", ["Tempranillo"]],
+    [/ribera del duero/i, "Ribera del Duero", "Spain", ["Tempranillo"]],
+    [/chablis/i, "Chablis", "France", ["Chardonnay"]],
+    [/sancerre/i, "Loire Valley", "France", ["Sauvignon Blanc"]],
+    [/muscadet/i, "Loire Valley", "France", ["Melon de Bourgogne"]],
+    [/champagne/i, "Champagne", "France", ["Chardonnay", "Pinot Noir", "Meunier"]],
+    [/bordeaux/i, "Bordeaux", "France", ["Cabernet Sauvignon", "Merlot"]],
+    [/beaujolais/i, "Beaujolais", "France", ["Gamay"]],
+    [/burgundy|bourgogne/i, "Burgundy", "France", text.includes("white") || text.includes("chardonnay") ? ["Chardonnay"] : ["Pinot Noir"]],
+    [/côtes du rhône|cotes du rhone|rhone|rhône/i, "Rhône Valley", "France", ["Grenache", "Syrah"]],
+    [/napa/i, "Napa Valley", "United States", ["Cabernet Sauvignon"]],
+    [/sonoma/i, "Sonoma", "United States", text.includes("chardonnay") ? ["Chardonnay"] : ["Pinot Noir"]],
+    [/willamette/i, "Willamette Valley", "United States", ["Pinot Noir"]],
+    [/mendoza/i, "Mendoza", "Argentina", ["Malbec"]],
+    [/mosel/i, "Mosel", "Germany", ["Riesling"]],
+    [/alsace/i, "Alsace", "France", ["Riesling"]]
+  ];
+  const regionMatch = regionRules.find(([pattern]) => pattern.test(name));
+  const grape = regionMatch?.[3] ?? inferGrapeFromName(text);
+
+  return {
+    producer,
+    vintage,
+    region: regionMatch?.[1],
+    country: regionMatch?.[2],
+    grape
+  };
+}
+
+function inferProducerName(name: string) {
+  const cleaned = name
+    .replace(/\b(19|20)\d{2}\b/g, " ")
+    .replace(/\b(chianti(?: classico)?|brunello di montalcino|barolo|barbaresco|rioja(?: reserva| gran reserva)?|chablis|sancerre|champagne|prosecco|cava|bordeaux|burgundy|bourgogne|beaujolais|muscadet|mendoza|napa valley|sonoma|willamette valley|pinot noir|cabernet sauvignon|cabernet|merlot|malbec|syrah|shiraz|grenache|sangiovese|nebbiolo|barbera|gamay|zinfandel|tempranillo|chardonnay|sauvignon blanc|riesling|chenin blanc|brut|red wine|white wine|rose|rosé)\b/gi, " ")
+    .replace(/\b(reserva|reserve|classico|docg|doc|aoc|wine|bottle|bottles)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return cleaned.length >= 3 ? cleaned : undefined;
+}
+
+function inferGrapeFromName(text: string) {
+  const grapes: Array<[string, string]> = [
+    ["cabernet sauvignon", "Cabernet Sauvignon"],
+    ["pinot noir", "Pinot Noir"],
+    ["sauvignon blanc", "Sauvignon Blanc"],
+    ["chardonnay", "Chardonnay"],
+    ["riesling", "Riesling"],
+    ["merlot", "Merlot"],
+    ["malbec", "Malbec"],
+    ["syrah", "Syrah"],
+    ["shiraz", "Syrah"],
+    ["grenache", "Grenache"],
+    ["sangiovese", "Sangiovese"],
+    ["nebbiolo", "Nebbiolo"],
+    ["barbera", "Barbera"],
+    ["gamay", "Gamay"],
+    ["zinfandel", "Zinfandel"],
+    ["tempranillo", "Tempranillo"],
+    ["chenin", "Chenin Blanc"],
+    ["albarino", "Albarino"],
+    ["albariño", "Albariño"]
+  ];
+  const grape = grapes.find(([needle]) => text.includes(needle))?.[1];
+  return grape ? [grape] : undefined;
 }
 
 function extractKeywords(input: string) {

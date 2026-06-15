@@ -54,6 +54,7 @@ import {
   applyWineSourceProfile,
   enrichWineWithSources,
   ExternalWineMatch,
+  WineLookupResult,
   lookupWineWithProfile
 } from "./wineLookupService";
 import { extractBarcodeCandidate, lookupWineByBarcode } from "./openFoodFactsService";
@@ -1147,11 +1148,19 @@ function InventoryScreen({
     if (!trimmed) return;
 
     setIsAddingWine(true);
+    setSourceLookupStatus(`Analyzing ${trimmed} and checking source data...`);
     try {
       const baseWine = createWineFromText(trimmed, inventory.length + 1);
       const enrichedWine = await enrichWineWithSources(baseWine);
       setInventory([...inventory, enrichedWine]);
+      setExpandedWineId(enrichedWine.id);
+      setSourceLookupStatus(sourceLookupMessage(enrichedWine));
       setNewWine("");
+    } catch {
+      const fallbackWine = createWineFromText(trimmed, inventory.length + 1);
+      setInventory([...inventory, fallbackWine]);
+      setExpandedWineId(fallbackWine.id);
+      setSourceLookupStatus(`Added ${fallbackWine.name} with inferred tasting notes. Source lookup can be retried from the bottle card.`);
     } finally {
       setIsAddingWine(false);
     }
@@ -1225,7 +1234,9 @@ function InventoryScreen({
             ? identifyWineFromLabelText(labelText, file.name, inventory.length + labelQueue.length + index + 1)
             : identifyWineFromImageName(file.name, inventory.length + labelQueue.length + index + 1);
 
-          const lookup = await lookupWineWithProfile(suggestion.wine.name);
+          const lookup = await lookupBestWineProfile(
+            suggestion.lookupQueries.length ? suggestion.lookupQueries : [suggestion.wine.name]
+          );
           const enrichedWine = applyWineSourceProfile(suggestion.wine, lookup);
 
           return {
@@ -1233,6 +1244,7 @@ function InventoryScreen({
             fileName: file.name,
             imageUrl: URL.createObjectURL(file),
             ...suggestion,
+            note: scanNoteForLookup(suggestion.note, suggestion.lookupQueries, lookup),
             externalMatches: lookup.matches,
             wine: {
               ...enrichedWine,
@@ -1511,7 +1523,7 @@ function InventoryScreen({
           onKeyDown={(event) => {
             if (event.key === "Enter") addWine();
           }}
-          placeholder="Example: 2021 Chablis, 2 bottles"
+          placeholder="Example: 2019 Poggio Amorelli Chianti Classico, 2 bottles"
           value={newWine}
         />
         <button className="primary-button compact-button" type="button" onClick={addWine} disabled={isAddingWine}>
@@ -2533,7 +2545,7 @@ async function readWineLabelText(file: File) {
 }
 
 async function readImageText(file: File) {
-  type Recognize = (image: File, lang?: string) => Promise<{ data: { text: string } }>;
+  type Recognize = (image: File | Blob, lang?: string) => Promise<{ data: { text: string } }>;
 
   try {
     const tesseractModule = (await import("tesseract.js")) as unknown as {
@@ -2543,11 +2555,73 @@ async function readImageText(file: File) {
     const recognize = tesseractModule.recognize ?? tesseractModule.default?.recognize;
     if (!recognize) return "";
 
-    const result = await recognize(file, "eng");
+    const preparedImage = await prepareImageForOcr(file);
+    const result = await recognize(preparedImage, "eng");
     return result.data.text.trim();
   } catch {
     return "";
   }
+}
+
+async function prepareImageForOcr(file: File): Promise<File | Blob> {
+  if (typeof document === "undefined" || typeof createImageBitmap === "undefined") return file;
+
+  try {
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(3, Math.max(1.4, 1800 / Math.max(bitmap.width, bitmap.height)));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(bitmap.width * scale);
+    canvas.height = Math.round(bitmap.height * scale);
+    const context = canvas.getContext("2d");
+    if (!context) return file;
+
+    context.filter = "contrast(1.25) saturate(0)";
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png", 0.92));
+    return blob ?? file;
+  } catch {
+    return file;
+  }
+}
+
+async function lookupBestWineProfile(queries: string[]): Promise<WineLookupResult> {
+  const cleanedQueries = Array.from(new Set(queries.map((query) => query.trim()).filter(Boolean))).slice(0, 5);
+  if (!cleanedQueries.length) return { matches: [] };
+
+  const lookups = await Promise.all(cleanedQueries.map((query) => lookupWineWithProfile(query)));
+  return lookups
+    .map((lookup, index) => ({ lookup, score: scoreWineLookup(lookup, cleanedQueries[index]) }))
+    .sort((a, b) => b.score - a.score)[0].lookup;
+}
+
+function scoreWineLookup(lookup: WineLookupResult, query: string) {
+  const matchedConfidence = lookup.matches.reduce(
+    (best, match) => Math.max(best, match.status === "matched" ? match.confidence ?? 0.7 : 0),
+    0
+  );
+  const profile = lookup.profile;
+  let score = matchedConfidence * 100;
+  if (profile?.producer) score += 18;
+  if (profile?.vintage) score += 12;
+  if (profile?.region) score += 10;
+  if (profile?.country) score += 8;
+  if (profile?.grape?.length) score += 8;
+  if (profile?.label_image_url) score += 8;
+  score += Math.min(12, query.split(/\s+/).length * 1.5);
+  return score;
+}
+
+function scanNoteForLookup(baseNote: string, queries: string[], lookup: WineLookupResult) {
+  const matched = lookup.matches.find((match) => match.status === "matched");
+  if (matched) {
+    return `${baseNote} Best source match: ${matched.label}.`;
+  }
+
+  if (queries.length > 1) {
+    return `${baseNote} Tried ${queries.length} label-based searches; review the recognized name before adding.`;
+  }
+
+  return baseNote;
 }
 
 function toggleValue<T>(values: T[], option: T) {
