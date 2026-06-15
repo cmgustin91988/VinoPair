@@ -58,6 +58,7 @@ import {
   lookupWineWithProfile
 } from "./wineLookupService";
 import { extractBarcodeCandidate, lookupWineByBarcode } from "./openFoodFactsService";
+import { identifyWineLabelWithVision, VisionLabelResult } from "./labelVisionService";
 import logoSrc from "./assets/vinopair-logo.png";
 import {
   CloudSession,
@@ -1200,8 +1201,9 @@ function InventoryScreen({
     try {
       const candidates = await Promise.all(
         files.map(async (file, index) => {
-          const labelText = await readWineLabelText(file);
           const labelImageUrl = await readFileAsDataUrl(file);
+          const visionResult = await identifyWineLabelWithVision(labelImageUrl, file.name);
+          const labelText = visionResult?.raw_text || (await readWineLabelText(file));
           const barcode = extractBarcodeCandidate(`${labelText} ${file.name}`);
 
           if (barcode) {
@@ -1230,7 +1232,9 @@ function InventoryScreen({
             }
           }
 
-          const suggestion = labelText
+          const suggestion = visionResult
+            ? createVisionLabelSuggestion(visionResult, file.name, inventory.length + labelQueue.length + index + 1)
+            : labelText
             ? identifyWineFromLabelText(labelText, file.name, inventory.length + labelQueue.length + index + 1)
             : identifyWineFromImageName(file.name, inventory.length + labelQueue.length + index + 1);
 
@@ -2542,6 +2546,30 @@ function cleanFlavorNotes(notes: string[]) {
 
 async function readWineLabelText(file: File) {
   return readImageText(file);
+}
+
+function createVisionLabelSuggestion(result: VisionLabelResult, fallbackName: string, index: number) {
+  const fallback = identifyWineFromImageName(fallbackName, index);
+  const wineName = result.name?.trim() || fallback.wine.name;
+  const wine = createWineFromText(wineName, index);
+  const lookupQueries = result.lookup_queries?.length ? result.lookup_queries : [wineName];
+
+  return {
+    wine: {
+      ...wine,
+      producer: result.producer || wine.producer,
+      vintage: result.vintage || wine.vintage,
+      region: result.region || result.appellation || wine.region,
+      country: result.country || wine.country,
+      grape: result.grape?.length ? result.grape : wine.grape,
+      style: result.style && result.style !== "Unknown" ? result.style : wine.style,
+      tags: Array.from(new Set([...wine.tags.filter((tag) => tag !== "AI can infer attributes"), "AI vision", "label scan"]))
+    },
+    confidence: Math.max(0.72, result.confidence ?? 0.84),
+    lookupQueries,
+    rawText: result.raw_text ?? "",
+    note: result.note || "AI vision read the label and identified the bottle for source lookup."
+  };
 }
 
 async function readImageText(file: File) {
