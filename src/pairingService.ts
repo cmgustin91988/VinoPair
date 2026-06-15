@@ -478,7 +478,7 @@ export function analyzeMeal(input: string): MealAnalysis {
 
   return {
     dish_name: cleanInput || "Dinner description",
-    cuisine: "Flexible",
+    cuisine: detectCuisine(normalized),
     main_ingredients: extractKeywords(cleanInput),
     protein: detectProtein(normalized),
     cooking_method: detectCookingMethod(normalized, "not specified"),
@@ -486,15 +486,11 @@ export function analyzeMeal(input: string): MealAnalysis {
     richness: detectRichness(normalized),
     acidity: detectAcidity(normalized),
     spice_level: detectSpice(normalized),
-    sweetness: "low",
-    umami: "medium",
-    dominant_flavors: ["savory", "balanced", "comforting"],
-    pairing_considerations: [
-      "Match the wine's intensity to the dish.",
-      "Choose enough acidity to keep the pairing lively.",
-      "Let your preferences decide the final style."
-    ],
-    pairing_risks: ["Avoid wines that are much heavier than the food."],
+    sweetness: detectSweetness(normalized),
+    umami: detectUmami(normalized),
+    dominant_flavors: detectDominantFlavors(normalized),
+    pairing_considerations: buildFallbackConsiderations(normalized),
+    pairing_risks: buildFallbackRisks(normalized),
     scenario
   };
 }
@@ -506,7 +502,7 @@ export function recommendPairing(
   mode: PairingMode,
   occasion: OccasionMode = "classic"
 ): PairingRecommendation {
-  const base = getScenarioRecommendation(meal.scenario);
+  const base = meal.scenario === "generic" ? getDynamicMealRecommendation(meal) : getScenarioRecommendation(meal.scenario);
   const inventoryMatch = findInventoryMatch(meal.scenario, preferences, inventory);
   const occasionAdjusted = applyOccasionToMealPairing(base, meal.scenario, occasion);
   const alternatives = prioritizeAlternatives(occasionAdjusted.alternatives, preferences);
@@ -1276,7 +1272,7 @@ function scoreKeywords(text: string, keywords: string[], weights: number[]) {
 
 function pickDishTitle(lines: string[]) {
   return (
-    lines.find((line) => /\b(salmon|duck|steak|chicken|pork|pasta|risotto|curry|salad|shrimp|scallop|lobster|mushroom)\b/i.test(line)) ??
+    lines.find((line) => /\b(salmon|duck|steak|chicken|pork|pasta|pizza|taco|sushi|ramen|burger|bbq|barbecue|risotto|curry|salad|shrimp|scallop|lobster|mushroom)\b/i.test(line)) ??
     lines.find((line) => line.length >= 8 && line.length <= 80) ??
     ""
   );
@@ -1303,6 +1299,19 @@ function extractMealTerms(text: string) {
     "basil",
     "garlic",
     "parmesan",
+    "pizza",
+    "mozzarella",
+    "taco",
+    "salsa",
+    "lime",
+    "sushi",
+    "ramen",
+    "miso",
+    "soy",
+    "ginger",
+    "burger",
+    "bbq",
+    "barbecue",
     "chicken",
     "thyme",
     "rosemary",
@@ -1378,6 +1387,89 @@ function detectSpice(text: string): MealAnalysis["spice_level"] {
   if (hasAny(text, ["thai", "chile", "chili", "jalapeno", "spicy", "curry", "harissa"])) return "high";
   if (hasAny(text, ["pepper", "ginger", "paprika"])) return "medium";
   return "low";
+}
+
+function detectCuisine(text: string) {
+  if (hasAny(text, ["taco", "quesadilla", "enchilada", "burrito", "salsa", "mole", "mexican"])) return "Mexican";
+  if (hasAny(text, ["sushi", "ramen", "teriyaki", "miso", "yakitori", "japanese"])) return "Japanese";
+  if (hasAny(text, ["stir fry", "stir-fry", "dumpling", "lo mein", "fried rice", "kung pao", "chinese"])) return "Chinese";
+  if (hasAny(text, ["indian", "tikka", "masala", "vindaloo", "saag", "dal", "naan"])) return "Indian";
+  if (hasAny(text, ["falafel", "shawarma", "hummus", "tzatziki", "greek", "mediterranean"])) return "Mediterranean";
+  if (hasAny(text, ["bbq", "barbecue", "brisket", "ribs", "pulled pork"])) return "American BBQ";
+  if (hasAny(text, ["burger", "fries", "sandwich", "mac and cheese"])) return "American comfort";
+  if (hasAny(text, ["italian", "risotto", "gnocchi", "lasagna", "parmesan"])) return "Italian";
+  if (hasAny(text, ["french", "bistro", "cream sauce", "tartiflette"])) return "French-inspired";
+  return "Flexible";
+}
+
+function detectSweetness(text: string): MealAnalysis["sweetness"] {
+  if (hasAny(text, ["honey", "maple", "sweet chili", "teriyaki", "pineapple", "glaze", "mango"])) return "medium";
+  return "low";
+}
+
+function detectUmami(text: string): MealAnalysis["umami"] {
+  if (hasAny(text, ["miso", "soy", "mushroom", "parmesan", "anchovy", "tomato", "bbq", "braised", "burger", "cheese"])) return "high";
+  return "medium";
+}
+
+function detectDominantFlavors(text: string) {
+  const flavors = [
+    ["tomato", "tomato"],
+    ["lime", "lime"],
+    ["lemon", "citrus"],
+    ["vinegar", "tangy"],
+    ["spicy", "spicy"],
+    ["chile", "chile heat"],
+    ["curry", "warm spice"],
+    ["soy", "soy umami"],
+    ["miso", "miso umami"],
+    ["ginger", "ginger"],
+    ["garlic", "garlic"],
+    ["herb", "herbal"],
+    ["cream", "creamy"],
+    ["cheese", "cheesy"],
+    ["fried", "crispy"],
+    ["grilled", "charred"],
+    ["bbq", "smoky-sweet"],
+    ["barbecue", "smoky-sweet"],
+    ["mushroom", "earthy"]
+  ];
+  const found = flavors.filter(([needle]) => text.includes(needle)).map(([, label]) => label);
+  return uniqueList(found.length ? found : ["savory", "balanced", "comforting"]).slice(0, 5);
+}
+
+function buildFallbackConsiderations(text: string) {
+  const considerations = [];
+  if (hasAny(text, ["spicy", "chile", "curry", "jalapeno", "harissa"])) {
+    considerations.push("Heat needs low tannin, moderate alcohol, and often a little sweetness.");
+  }
+  if (hasAny(text, ["tomato", "salsa", "vinegar", "lime", "lemon", "pickled"])) {
+    considerations.push("Acid in the dish needs a wine with real freshness.");
+  }
+  if (hasAny(text, ["cream", "cheese", "butter", "fried", "crispy"])) {
+    considerations.push("Richness and salt need bubbles or acidity to reset the palate.");
+  }
+  if (hasAny(text, ["bbq", "barbecue", "smoked", "brisket", "ribs"])) {
+    considerations.push("Smoke and sweet glaze need ripe fruit, spice, and enough structure.");
+  }
+  if (hasAny(text, ["soy", "miso", "mushroom", "parmesan"])) {
+    considerations.push("Umami works best with savory wines that avoid harsh tannin.");
+  }
+
+  return considerations.length
+    ? considerations.slice(0, 3)
+    : ["Match the wine's intensity to the dish.", "Choose enough acidity to keep the pairing lively.", "Let sauce and spice drive the final style."];
+}
+
+function buildFallbackRisks(text: string) {
+  const risks = [];
+  if (hasAny(text, ["spicy", "chile", "curry", "jalapeno"])) risks.push("Avoid high-tannin, high-alcohol reds with heat.");
+  if (hasAny(text, ["tomato", "lime", "vinegar"])) risks.push("Avoid low-acid wines with tart sauces.");
+  if (hasAny(text, ["cream", "cheese", "fried"])) risks.push("Avoid flat wines that cannot cut richness.");
+  if (hasAny(text, ["sushi", "shellfish", "delicate"])) risks.push("Avoid heavy tannic reds with delicate seafood.");
+  if (hasAny(text, ["bbq", "barbecue", "sweet glaze"])) risks.push("Avoid thin, austere wines with smoke and sweet sauce.");
+
+  return risks.length ? risks.slice(0, 3) : ["Avoid wines that are much heavier than the food."];
 }
 
 function inferWineAttributes(name: string): Omit<Wine, "id" | "name" | "quantity" | "source_matches" | "verification_status"> {
@@ -1612,6 +1704,164 @@ function extractKeywords(input: string) {
     .filter((word) => word.length > 3);
 
   return Array.from(new Set(words)).slice(0, 5);
+}
+
+function getDynamicMealRecommendation(meal: MealAnalysis) {
+  const text = [
+    meal.dish_name,
+    meal.cuisine,
+    meal.protein,
+    meal.sauce,
+    meal.cooking_method,
+    meal.main_ingredients.join(" "),
+    meal.dominant_flavors.join(" ")
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  const profiles = [
+    {
+      test: () => hasAny(text, ["sushi", "sashimi", "nigiri", "maki"]),
+      recommended_style: "Crisp mineral white or dry sparkling",
+      specific_suggestion: "Muscadet, Chablis, or Brut Champagne",
+      perfect_pairing: "Muscadet or grower Champagne",
+      confidence: 0.88,
+      reason: "Sushi needs clean acidity, low tannin, and mineral freshness so fish, rice vinegar, soy, and wasabi stay precise.",
+      alternatives: ["Albarino", "Sancerre", "Dry Riesling", "Junmai-style sake"],
+      avoid: ["Tannic reds", "Oaky Chardonnay", "High-alcohol reds"]
+    },
+    {
+      test: () => hasAny(text, ["ramen", "miso", "soy umami", "tonkotsu"]),
+      recommended_style: "Savory white, sparkling, or light red",
+      specific_suggestion: "Dry Riesling, Champagne, or chilled Gamay",
+      perfect_pairing: "Dry Riesling or Brut Champagne",
+      confidence: 0.84,
+      reason: "Ramen has salt, broth richness, and umami; acidity and bubbles refresh the broth while light reds avoid bitter tannin.",
+      alternatives: ["Chenin Blanc", "Gamay", "Pinot Noir", "Sparkling sake"],
+      avoid: ["Heavy Cabernet", "Jammy reds", "Buttery oak"]
+    },
+    {
+      test: () => hasAny(text, ["taco", "quesadilla", "enchilada", "burrito", "salsa", "mexican"]),
+      recommended_style: "Zesty white, dry rose, or chillable red",
+      specific_suggestion: "Albarino, dry rose, or chilled Garnacha",
+      perfect_pairing: "Albarino or chilled Garnacha",
+      confidence: 0.86,
+      reason: "Mexican flavors often bring lime, salsa, chile, herbs, and salt; zesty whites or chillable reds keep the pairing fresh instead of heavy.",
+      alternatives: ["Vinho Verde", "Sauvignon Blanc", "Lambrusco secco", "Pet-nat"],
+      avoid: ["High-tannin reds", "High-alcohol reds with chile", "Oaky whites"]
+    },
+    {
+      test: () => hasAny(text, ["indian", "tikka", "masala", "vindaloo", "saag", "dal", "naan", "warm spice"]),
+      recommended_style: "Aromatic white with lift",
+      specific_suggestion: "Off-dry Riesling or Gewurztraminer",
+      perfect_pairing: "Off-dry Riesling",
+      confidence: 0.87,
+      reason: "Indian spices and heat are best with aromatic lift, low tannin, and a little sweetness when chile or creamy sauces are involved.",
+      alternatives: ["Vouvray demi-sec", "Sparkling Chenin Blanc", "Gewurztraminer", "Pet-nat"],
+      avoid: ["Tannic reds", "Very dry high-alcohol reds", "Aggressively oaky whites"]
+    },
+    {
+      test: () => hasAny(text, ["stir fry", "stir-fry", "dumpling", "lo mein", "fried rice", "kung pao", "chinese", "soy"]),
+      recommended_style: "Aromatic white or juicy low-tannin red",
+      specific_suggestion: "Dry Riesling, Chenin Blanc, or chilled Gamay",
+      perfect_pairing: "Dry Riesling or Chenin Blanc",
+      confidence: 0.84,
+      reason: "Soy, ginger, garlic, and wok-char need freshness and aromatic clarity; low tannin avoids clashing with salt and umami.",
+      alternatives: ["Pinot Gris", "Gamay", "Sparkling rose", "Lambrusco secco"],
+      avoid: ["Very tannic reds", "Heavy oak", "Flat low-acid whites"]
+    },
+    {
+      test: () => hasAny(text, ["falafel", "shawarma", "hummus", "tzatziki", "greek", "mediterranean"]),
+      recommended_style: "Herbal white or bright rose",
+      specific_suggestion: "Assyrtiko, Sauvignon Blanc, or dry rose",
+      perfect_pairing: "Assyrtiko or dry rose",
+      confidence: 0.84,
+      reason: "Mediterranean dishes lean on herbs, lemon, yogurt, sesame, and grilled notes; mineral whites and dry rose keep everything lifted.",
+      alternatives: ["Vermentino", "Picpoul", "Gruner Veltliner", "Chilled Cinsault"],
+      avoid: ["Heavy oaky reds", "Sweet wines", "Very tannic Cabernet"]
+    },
+    {
+      test: () => hasAny(text, ["bbq", "barbecue", "brisket", "ribs", "pulled pork", "smoky-sweet"]),
+      recommended_style: "Fruit-forward red with spice",
+      specific_suggestion: "Zinfandel, Syrah, or Lambrusco secco",
+      perfect_pairing: "Syrah or dry Lambrusco",
+      confidence: 0.86,
+      reason: "BBQ brings smoke, char, fat, and sweet sauce; ripe fruit and spice can meet the sauce while acidity keeps the pairing from feeling sticky.",
+      alternatives: ["Zinfandel", "Garnacha", "Malbec", "Chilled Barbera"],
+      avoid: ["Thin austere reds", "Delicate whites", "Very oaky high-alcohol reds"]
+    },
+    {
+      test: () => hasAny(text, ["burger", "cheeseburger", "fries"]),
+      recommended_style: "Juicy red with enough acidity",
+      specific_suggestion: "Cabernet Franc, Barbera, or Rioja",
+      perfect_pairing: "Cabernet Franc or Barbera",
+      confidence: 0.84,
+      reason: "A burger needs red-fruited structure for beef and cheese, but enough acidity for pickles, ketchup, salt, and fries.",
+      alternatives: ["Rioja Crianza", "Malbec", "Zinfandel", "Lambrusco secco"],
+      avoid: ["Very delicate whites", "Low-acid jammy reds"]
+    },
+    {
+      test: () => hasAny(text, ["fried", "crispy", "tempura", "fried chicken"]),
+      recommended_style: "Dry sparkling or high-acid white",
+      specific_suggestion: "Brut Champagne, Cava, or Chablis",
+      perfect_pairing: "Brut sparkling wine",
+      confidence: 0.85,
+      reason: "Fried and crispy foods want bubbles, acidity, and freshness to cut oil and salt between bites.",
+      alternatives: ["Cava", "Chenin Blanc", "Albarino", "Dry rose"],
+      avoid: ["Heavy tannic reds", "Buttery low-acid whites"]
+    },
+    {
+      test: () => hasAny(text, ["cream", "alfredo", "carbonara", "mac and cheese", "creamy"]),
+      recommended_style: "Textured white with acidity",
+      specific_suggestion: "White Burgundy, Chenin Blanc, or Champagne",
+      perfect_pairing: "Chenin Blanc or White Burgundy",
+      confidence: 0.84,
+      reason: "Creamy dishes need texture but also acidity; Chenin, Chardonnay, or Champagne can meet the richness without turning heavy.",
+      alternatives: ["Chablis", "Vermentino", "Dry sparkling", "Pinot Gris"],
+      avoid: ["Low-acid whites", "Very tannic reds", "Sweet wines"]
+    }
+  ];
+
+  const match = profiles.find((profile) => profile.test());
+  if (match) return match;
+
+  if (meal.spice_level === "high") {
+    return {
+      recommended_style: "Low-tannin aromatic wine",
+      specific_suggestion: "Off-dry Riesling or sparkling Chenin Blanc",
+      perfect_pairing: "Off-dry Riesling",
+      confidence: 0.8,
+      reason: "Spicy dishes need aromatic lift, lower alcohol, low tannin, and often a little sweetness to keep heat in balance.",
+      alternatives: ["Pet-nat", "Vouvray demi-sec", "Dry rose", "Chilled Gamay"],
+      avoid: ["High-tannin reds", "High-alcohol wines", "Oaky whites"]
+    };
+  }
+
+  if (meal.acidity === "high") {
+    return {
+      recommended_style: "High-acid wine",
+      specific_suggestion: "Sauvignon Blanc, Barbera, or dry sparkling",
+      perfect_pairing: "Sauvignon Blanc or Barbera",
+      confidence: 0.79,
+      reason: "A tart or citrusy dish needs a wine with similar freshness so the wine does not taste dull.",
+      alternatives: ["Albarino", "Chablis", "Chianti", "Brut sparkling"],
+      avoid: ["Low-acid jammy reds", "Buttery oaked whites"]
+    };
+  }
+
+  if (meal.richness === "high") {
+    return {
+      recommended_style: "Structured but fresh wine",
+      specific_suggestion: "Pinot Noir, Chenin Blanc, or dry sparkling",
+      perfect_pairing: "Chenin Blanc or Pinot Noir",
+      confidence: 0.78,
+      reason: "Rich dishes need either acidity, bubbles, or moderate tannin to keep the pairing from feeling heavy.",
+      alternatives: ["Champagne", "Barbera", "Gamay", "White Burgundy"],
+      avoid: ["Flat low-acid wines", "Very sweet wines"]
+    };
+  }
+
+  return getScenarioRecommendation("generic");
 }
 
 function getScenarioRecommendation(scenario: MealScenario) {
