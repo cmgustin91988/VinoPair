@@ -59,6 +59,7 @@ import {
 } from "./wineLookupService";
 import { extractBarcodeCandidate, lookupWineByBarcode } from "./openFoodFactsService";
 import { identifyMealImageWithVision, identifyWineLabelWithVision, VisionLabelResult } from "./labelVisionService";
+import { fetchRecipeFromUrl } from "./recipeUrlService";
 import logoSrc from "./assets/vinopair-logo.png";
 import {
   CloudSession,
@@ -136,6 +137,8 @@ function App() {
   );
   const [isThinking, setIsThinking] = useState(false);
   const [uploadedLabel, setUploadedLabel] = useState("Ready for dinner details");
+  const [recipeUrl, setRecipeUrl] = useState("");
+  const [isFetchingRecipe, setIsFetchingRecipe] = useState(false);
   const [copied, setCopied] = useState(false);
   const [cloudSession, setCloudSession] = useState<CloudSession | null>(() => getStoredCloudSession());
   const [cloudStatus, setCloudStatus] = useState(
@@ -260,6 +263,33 @@ function App() {
     setUploadedLabel(`${file.name} translated into a meal description`);
     event.target.value = "";
     runPairingForText(normalizedMeal);
+  };
+
+  const pullRecipeFromUrl = async () => {
+    const trimmed = recipeUrl.trim();
+    if (!trimmed) {
+      setUploadedLabel("Paste a recipe URL first.");
+      return;
+    }
+
+    setInputMode("recipe");
+    setIsFetchingRecipe(true);
+    setUploadedLabel("Reading recipe URL...");
+
+    try {
+      const recipe = await fetchRecipeFromUrl(trimmed);
+      if (!recipe.meal_description) {
+        setUploadedLabel(recipe.error ?? "Could not find a recipe on that URL.");
+        return;
+      }
+
+      const normalizedMeal = normalizeMealInput(recipe.meal_description);
+      setMealInput(normalizedMeal);
+      setUploadedLabel(`${recipe.title || "Recipe"} pulled from URL${recipe.source_type === "metadata" ? " (review suggested)" : ""}`);
+      runPairingForText(normalizedMeal);
+    } finally {
+      setIsFetchingRecipe(false);
+    }
   };
 
   const copyRecommendation = async () => {
@@ -421,6 +451,10 @@ function App() {
           onOccasion={setOccasion}
           onPairingMode={setPairingMode}
           onUpload={handleTextUpload}
+          recipeUrl={recipeUrl}
+          onRecipeUrl={setRecipeUrl}
+          onRecipeUrlFetch={pullRecipeFromUrl}
+          isFetchingRecipe={isFetchingRecipe}
           preview={liveAnalysis}
           preferences={preferences}
           onBudgetRange={updateBudgetRange}
@@ -650,6 +684,10 @@ function MealScreen({
   onOccasion,
   onPairingMode,
   onUpload,
+  recipeUrl,
+  onRecipeUrl,
+  onRecipeUrlFetch,
+  isFetchingRecipe,
   preferences,
   onBudgetRange
 }: {
@@ -666,6 +704,10 @@ function MealScreen({
   onOccasion: (occasion: OccasionMode) => void;
   onPairingMode: (mode: PairingMode) => void;
   onUpload: (event: ChangeEvent<HTMLInputElement>) => void;
+  recipeUrl: string;
+  onRecipeUrl: (url: string) => void;
+  onRecipeUrlFetch: () => void;
+  isFetchingRecipe: boolean;
   preferences: UserPreferences;
   onBudgetRange: (min: number, max: number) => void;
 }) {
@@ -713,6 +755,22 @@ function MealScreen({
             <input accept=".txt,.md,.recipe,image/*" onChange={onUpload} type="file" />
           </label>
           <span>{uploadedLabel}</span>
+        </div>
+
+        <div className="recipe-url-row">
+          <input
+            onChange={(event) => onRecipeUrl(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") onRecipeUrlFetch();
+            }}
+            placeholder="Paste recipe URL"
+            type="url"
+            value={recipeUrl}
+          />
+          <button className="secondary-button" type="button" onClick={onRecipeUrlFetch} disabled={isFetchingRecipe}>
+            <FileText size={17} />
+            {isFetchingRecipe ? "Reading..." : "Pull recipe"}
+          </button>
         </div>
 
         <OccasionModes occasion={occasion} onOccasion={onOccasion} />

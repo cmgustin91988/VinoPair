@@ -1217,6 +1217,29 @@ h1 {
   font-weight: 700;
 }
 
+.recipe-url-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  margin: -4px 0 18px;
+}
+
+.recipe-url-row input {
+  min-height: 46px;
+}
+
+.recipe-url-row .secondary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 46px;
+  border-radius: 8px;
+  padding: 0 14px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
 .file-button input {
   display: none;
 }
@@ -2410,7 +2433,8 @@ button:disabled {
   .segmented-control,
   .hero-stat-grid,
   .snapshot-flow,
-  .pairing-gauge-panel {
+  .pairing-gauge-panel,
+  .recipe-url-row {
     grid-template-columns: 1fr;
   }
 

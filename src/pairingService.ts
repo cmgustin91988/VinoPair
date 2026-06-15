@@ -9,6 +9,7 @@ export type MealScenario =
   | "duck"
   | "thai_curry"
   | "steak"
+  | "pizza"
   | "tomato_pasta"
   | "roast_chicken"
   | "pork"
@@ -303,6 +304,30 @@ export function analyzeMeal(input: string): MealAnalysis {
         "Roasted peppers welcome savory red fruit."
       ],
       pairing_risks: ["Avoid very light whites.", "Avoid low-acid heavy reds."],
+      scenario
+    };
+  }
+
+  if (scenario === "pizza") {
+    return {
+      dish_name: cleanInput || "Cheese pizza",
+      cuisine: "Italian-American",
+      main_ingredients: pickPresentIngredients(normalized, ["pizza", "mozzarella", "tomato sauce", "dough", "basil", "parmesan", "pepperoni", "mushroom"]),
+      protein: hasAny(normalized, ["pepperoni", "sausage", "meatball", "prosciutto"]) ? "cured meat" : "cheese",
+      cooking_method: detectCookingMethod(normalized, "baked"),
+      sauce: detectSauce(normalized, "tomato sauce and melted cheese"),
+      richness: hasAny(normalized, ["extra cheese", "deep dish", "white pizza", "sausage", "pepperoni"]) ? "medium-high" : "medium",
+      acidity: hasAny(normalized, ["white pizza", "alfredo"]) ? "medium" : "medium-high",
+      spice_level: hasAny(normalized, ["pepperoni", "chile", "hot honey", "spicy"]) ? "medium" : "low",
+      sweetness: hasAny(normalized, ["hot honey", "pineapple"]) ? "medium" : "low",
+      umami: "high",
+      dominant_flavors: ["tomato", "melted cheese", "baked dough", "salty", "savory"],
+      pairing_considerations: [
+        "Tomato sauce needs acidity so the wine does not taste flat.",
+        "Melted cheese wants freshness and enough fruit to handle salt.",
+        "Moderate tannin works better than a heavy, oaky red."
+      ],
+      pairing_risks: ["Avoid low-acid jammy reds.", "Avoid buttery oaked whites.", "Avoid very tannic Cabernet with plain cheese pizza."],
       scenario
     };
   }
@@ -865,6 +890,7 @@ function weeknightBottleForScenario(scenario: MealScenario, fallback: string) {
     duck: "Pinot Noir or Cru Beaujolais",
     thai_curry: "Off-dry Riesling",
     steak: "Malbec or Cabernet Franc",
+    pizza: "Chianti, Barbera, or Lambrusco secco",
     tomato_pasta: "Chianti or Barbera",
     roast_chicken: "Chardonnay or Pinot Noir",
     pork: "Gamay or dry Riesling",
@@ -882,6 +908,7 @@ function dinnerPartyBottleForScenario(scenario: MealScenario, fallback: string) 
     duck: "Burgundy Pinot Noir or aged Barbera",
     thai_curry: "Vouvray demi-sec or sparkling Chenin Blanc",
     steak: "Northern Rhone Syrah or Cabernet Franc",
+    pizza: "Chianti Classico or grower Lambrusco secco",
     tomato_pasta: "Chianti Classico Riserva or Etna Rosso",
     roast_chicken: "White Burgundy or aged Rioja Blanco",
     pork: "Cru Beaujolais or dry Alsace Riesling",
@@ -899,6 +926,7 @@ function dateNightBottleForScenario(scenario: MealScenario) {
     duck: "silky Pinot Noir",
     thai_curry: "off-dry Riesling",
     steak: "Cabernet Franc",
+    pizza: "Chianti Classico",
     tomato_pasta: "Chianti Classico",
     roast_chicken: "White Burgundy",
     pork: "Gamay",
@@ -913,6 +941,7 @@ function dateNightBottleForScenario(scenario: MealScenario) {
 function takeoutBottleForScenario(scenario: MealScenario, fallback: string) {
   const suggestions: Partial<Record<MealScenario, string>> = {
     thai_curry: "off-dry Riesling or pet-nat",
+    pizza: "chilled Barbera or Lambrusco secco",
     tomato_pasta: "chilled Barbera or Lambrusco secco",
     steak: "Malbec or chilled Rioja",
     shellfish: "Muscadet or dry sparkling",
@@ -1216,6 +1245,7 @@ function classifyMealScenario(text: string): MealScenario {
     duck: scoreKeywords(text, ["duck", "confit", "gastrique", "cherry"], [5, 2, 2, 1]),
     thai_curry: scoreKeywords(text, ["thai", "green curry", "coconut milk", "lemongrass", "fish sauce", "shrimp"], [4, 4, 3, 2, 2, 1]),
     steak: scoreKeywords(text, ["steak", "ribeye", "sirloin", "beef", "chimichurri"], [5, 4, 4, 3, 3]),
+    pizza: scoreKeywords(text, ["pizza", "cheese pizza", "margherita", "pepperoni", "mozzarella", "plain slice", "slice"], [6, 7, 5, 4, 2, 5, 2]),
     tomato_pasta: scoreKeywords(text, ["pasta", "spaghetti", "rigatoni", "tomato", "marinara", "bolognese", "arrabbiata"], [3, 3, 3, 3, 3, 3, 3]),
     roast_chicken: scoreKeywords(text, ["chicken", "roast chicken", "lemon chicken", "thyme", "rosemary"], [4, 4, 3, 1, 1]),
     pork: scoreKeywords(text, ["pork", "tenderloin", "chop", "ham", "bacon", "mustard", "apple"], [4, 3, 3, 2, 1, 1, 1]),
@@ -1626,6 +1656,16 @@ function getScenarioRecommendation(scenario: MealScenario) {
       alternatives: ["Syrah", "Carmenere", "Rioja Reserva", "Loire Cabernet Franc"],
       avoid: ["Very light white wines", "Low-acid heavy reds"]
     },
+    pizza: {
+      recommended_style: "Bright, tomato-friendly red or dry sparkling",
+      specific_suggestion: "Chianti, Barbera, or Lambrusco secco",
+      perfect_pairing: "Chianti Classico or Barbera d'Asti",
+      confidence: 0.91,
+      reason:
+        "Cheese pizza is really tomato acid, melted mozzarella, salt, and baked dough. Chianti or Barbera has the acidity for the sauce, enough red fruit for the cheese, and moderate tannin so the slice stays easy.",
+      alternatives: ["Lambrusco secco", "Dolcetto", "Etna Rosso", "Frappato"],
+      avoid: ["Low-acid jammy reds", "Buttery oaked Chardonnay", "Very tannic Cabernet Sauvignon"]
+    },
     tomato_pasta: {
       recommended_style: "Bright Italian red",
       specific_suggestion: "Chianti Classico or Barbera",
@@ -1711,6 +1751,7 @@ function findInventoryMatch(
     duck: ["pinot", "beaujolais", "gamay", "barbera", "red", "orange"],
     thai_curry: ["riesling", "chenin", "sparkling", "pet-nat", "orange", "white"],
     steak: ["rioja", "malbec", "cabernet franc", "syrah", "red"],
+    pizza: ["chianti", "barbera", "dolcetto", "etna", "lambrusco", "sangiovese", "red", "sparkling"],
     tomato_pasta: ["chianti", "barbera", "dolcetto", "etna", "lambrusco", "red"],
     roast_chicken: ["chardonnay", "burgundy", "chenin", "pinot", "gamay", "grenache", "white", "red"],
     pork: ["gamay", "pinot", "riesling", "barbera", "chenin", "red", "white"],

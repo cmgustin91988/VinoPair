@@ -21,7 +21,7 @@ VinoPair is a standalone wine application focused on:
 
 ## Current App
 
-- Meal input for dinner descriptions, recipe files, and menu-image uploads.
+- Meal input for dinner descriptions, recipe URLs, recipe files, and menu-image uploads.
 - Wine-first pairing that starts from a cellar bottle or typed wine.
 - Occasion modes: Classic, Weeknight, Dinner Party, Date Night, and Takeout.
 - Graphical pairing views with a balance compass, flavor constellation, wine profile cards, and food pairing tiles.
